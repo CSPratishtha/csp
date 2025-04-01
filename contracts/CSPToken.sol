@@ -72,30 +72,48 @@ contract CSP_Token is ERC20Burnable, Ownable, ReentrancyGuard {
         emit PhaseStarted(phase, _startTime, _endTime, _lockTime);
     }
 
-    function buyTokens(uint256 usdtAmount) external {
-        require(currentPhase != Phase.NotStarted && currentPhase != Phase.Ended, "Sale not active");
-        require(phaseDetails[currentPhase].isActive, "Phase is not active");
-        require(usdtAmount >= 10, "Minimum purchase is 10 USDT");
-        require(USDT_Token.allowance(msg.sender, address(this)) >= usdtAmount, "Insufficient USDT allowance");
-        
-        PhaseDetails storage phase = phaseDetails[currentPhase];
-        uint256 tokensToBuy = (usdtAmount * 10**18) / phase.pricePerToken;
-        require(tokensToBuy <= phase.allocation, "Not enough tokens available");
+   function buyTokens(uint256 usdtAmount) external {
+    require(currentPhase == Phase.PrivateSale, "Only Private Sale allows locked tokens");
+    require(phaseDetails[currentPhase].isActive, "Phase is not active");
+    require(usdtAmount >= 10, "Minimum purchase is 10 USDT");
+    require(USDT_Token.allowance(msg.sender, address(this)) >= usdtAmount, "Insufficient USDT allowance");
 
-        USDT_Token.transferFrom(msg.sender, address(this), usdtAmount);
-        _transfer(owner(), address(this), tokensToBuy);
+    PhaseDetails storage phase = phaseDetails[currentPhase];
+    uint256 tokensToBuy = (usdtAmount * 10**18) / phase.pricePerToken;
+    require(tokensToBuy <= phase.allocation, "Not enough tokens available");
 
-        vestingSchedules[msg.sender] = VestingSchedule({
-            totalAmount: tokensToBuy,
-            claimedAmount: 0,
-            lockEndTime: block.timestamp + lockDuration,
-            unlockPerBatch: tokensToBuy * 20 / 100,
-            lastClaimTime: block.timestamp + lockDuration
-        });
+    require(balanceOf(owner()) >= tokensToBuy, "Owner does not have enough tokens");
 
-        emit TokensVested(msg.sender, tokensToBuy);
-        phase.allocation -= tokensToBuy;
-    }
+    USDT_Token.transferFrom(msg.sender, address(this), usdtAmount);
+    _transfer(owner(), address(this), tokensToBuy);
+
+    // Update vesting schedule to accumulate purchases
+    vestingSchedules[msg.sender].totalAmount += tokensToBuy;
+    vestingSchedules[msg.sender].unlockPerBatch = vestingSchedules[msg.sender].totalAmount * 20 / 100;
+    vestingSchedules[msg.sender].lockEndTime = block.timestamp + lockDuration;
+    vestingSchedules[msg.sender].lastClaimTime = block.timestamp + lockDuration;
+
+    emit TokensVested(msg.sender, tokensToBuy);
+    phase.allocation -= tokensToBuy;
+}
+
+ 
+function transferWithLock(address recipient, uint256 amount) external onlyOwner {
+    require(balanceOf(owner()) >= amount, "Not enough tokens");
+    _transfer(owner(), address(this), amount);
+
+    // Update userBalances mapping
+    userBalances[recipient] += amount;
+
+    vestingSchedules[recipient] = VestingSchedule({
+        totalAmount: amount,
+        claimedAmount: 0,
+        lockEndTime: block.timestamp + lockDuration,
+        unlockPerBatch: amount * 20 / 100,
+        lastClaimTime: block.timestamp + lockDuration
+    });
+}
+
 
     function claimVestedTokens() external {
         VestingSchedule storage schedule = vestingSchedules[msg.sender];
